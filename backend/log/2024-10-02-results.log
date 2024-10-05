@@ -1,0 +1,4 @@
+{"level":"info","message":"Listening on port 9000....","timestamp":"2024-10-02 20:58:58"}
+{"level":"warn","message":"Connection failed: , retrying in 3 seconds...","timestamp":"2024-10-02 20:58:58"}
+{"level":"warn","message":"Connection failed: , retrying in 6 seconds...","timestamp":"2024-10-02 20:59:01"}
+{"level":"warn","message":"Connection failed: , retrying in 9 seconds...","timestamp":"2024-10-02 20:59:07"}
