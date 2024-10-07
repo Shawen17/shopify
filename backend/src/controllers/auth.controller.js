@@ -13,6 +13,36 @@ const shopifyAPI = axios.create({
   },
 });
 
+const retry = async (func, retries = 5, delay = 3000) => {
+  let delayFactor = 1;
+
+  if (typeof func !== "function") {
+    throw new Error("The first argument must be a function");
+  }
+
+  while (retries > 0) {
+    try {
+      const result = await func();
+      logger.info(`${func.name} completed successfully.`);
+      return result;
+    } catch (error) {
+      const delayTime = delay * delayFactor;
+      logger.warn(
+        `operation failed in ${func.name} : ${error.message}, retrying in ${
+          delayTime / 1000
+        } seconds...`
+      );
+      await new Promise((resolve) => setTimeout(resolve, delayTime));
+      delayFactor += 1;
+      retries -= 1;
+    }
+  }
+
+  logger.error(
+    `Could not complete ${func.name} operation after several attempts`
+  );
+};
+
 exports.add_company = async (req, res) => {
   try {
     const { name, address } = req.body;
@@ -45,6 +75,7 @@ exports.add_customer = async (req, res) => {
       await transaction.rollback();
       return res.status(404).json({ message: "Company not found" });
     }
+
     const data = {
       first_name,
       last_name,
@@ -55,7 +86,7 @@ exports.add_customer = async (req, res) => {
 
     const customer = await Customer.create(data, { transaction });
 
-    try {
+    const createShopifyCustomer = async () => {
       const response = await shopifyAPI.post("/customers.json", {
         customer: {
           first_name: customer.first_name,
@@ -65,7 +96,6 @@ exports.add_customer = async (req, res) => {
         },
       });
 
-      // Log the status and data from the Shopify response
       logger.info("Shopify API response status:", response?.status);
       logger.info("Shopify API response headers:", response?.headers);
       logger.info("Shopify API response data:", response?.data);
@@ -76,25 +106,23 @@ exports.add_customer = async (req, res) => {
         throw new Error("Failed to retrieve customer ID from Shopify");
       }
 
-      await customer.update({ shopifyId: shopifyCustomerId }, { transaction });
-      const newCustomer = await Customer.findOne({
-        where: { shopifyId: shopifyCustomerId },
-        transaction,
-      });
-      await transaction.commit();
+      return shopifyCustomerId;
+    };
 
-      return res.status(201).send({
-        message: `Customer ${newCustomer.first_name} added successfully`,
-        data: newCustomer,
-      });
-    } catch (apiError) {
-      logger.error("Error during Shopify API request:", apiError.message);
-      logger.error(
-        "Shopify API error details:",
-        apiError.response?.data || apiError.message
-      );
-      throw new Error("Failed to create customer in Shopify");
-    }
+    const shopifyCustomerId = await retry(createShopifyCustomer);
+
+    await customer.update({ shopifyId: shopifyCustomerId }, { transaction });
+    const newCustomer = await Customer.findOne({
+      where: { shopifyId: shopifyCustomerId },
+      transaction,
+    });
+
+    await transaction.commit();
+
+    return res.status(201).send({
+      message: `Customer ${newCustomer.first_name} added successfully`,
+      data: newCustomer,
+    });
   } catch (err) {
     await transaction.rollback();
     logger.error(`Error during add_customer operation: ${err.message}`);
@@ -154,9 +182,13 @@ exports.update_customer = async (req, res) => {
 
     await customer.update(updates, { transaction });
 
-    await shopifyAPI.put(`/customers/${shopifyId}.json`, {
-      customer: updates,
-    });
+    const updateShopifyCustomer = async () => {
+      await shopifyAPI.put(`/customers/${shopifyId}.json`, {
+        customer: updates,
+      });
+    };
+
+    await retry(updateShopifyCustomer);
 
     const updatedCustomer = await Customer.findOne({
       where: { shopifyId },
@@ -202,32 +234,39 @@ exports.get_customers = async (req, res) => {
       url += `&page_info=${pageInfo}`;
     }
 
-    const response = await axios.get(url, {
-      headers: {
-        "X-Shopify-Access-Token": process.env.ACCESS_TOKEN,
-      },
-    });
-
-    const customers = response.data.customers;
-    const linkHeader = response.headers.link;
-
-    let nextPageInfo = null;
-    let prevPageInfo = null;
-
-    if (linkHeader) {
-      const links = linkHeader.split(",");
-      links.forEach((link) => {
-        if (link.includes('rel="next"')) {
-          nextPageInfo = new URLSearchParams(link.match(/<(.+?)>/)[1]).get(
-            "page_info"
-          );
-        } else if (link.includes('rel="previous"')) {
-          prevPageInfo = new URLSearchParams(link.match(/<(.+?)>/)[1]).get(
-            "page_info"
-          );
-        }
+    const getShopifyCustomers = async () => {
+      const response = await axios.get(url, {
+        headers: {
+          "X-Shopify-Access-Token": process.env.ACCESS_TOKEN,
+        },
       });
-    }
+
+      const customers = response.data.customers;
+      const linkHeader = response.headers.link;
+
+      let nextPageInfo = null;
+      let prevPageInfo = null;
+
+      if (linkHeader) {
+        const links = linkHeader.split(",");
+        links.forEach((link) => {
+          if (link.includes('rel="next"')) {
+            nextPageInfo = new URLSearchParams(link.match(/<(.+?)>/)[1]).get(
+              "page_info"
+            );
+          } else if (link.includes('rel="previous"')) {
+            prevPageInfo = new URLSearchParams(link.match(/<(.+?)>/)[1]).get(
+              "page_info"
+            );
+          }
+        });
+      }
+      return { customers, nextPageInfo, prevPageInfo };
+    };
+
+    const { customers, nextPageInfo, prevPageInfo } = await retry(
+      getShopifyCustomers
+    );
 
     res.status(200).send({
       data: customers,
@@ -236,6 +275,7 @@ exports.get_customers = async (req, res) => {
       message: "Retrieval successful",
     });
   } catch (err) {
+    logger.error(`Error during getShopifyCustomers: ${err.message}`);
     res.status(500).send({ message: err.message });
   }
 };
@@ -254,12 +294,18 @@ exports.delete_customer = async (req, res) => {
       return res.status(404).json({ message: "Customer not found" });
     }
 
-    try {
-      await shopifyAPI.delete(`/customers/${shopifyId}.json`);
-    } catch (apiError) {
-      logger.error(`Error deleting customer from Shopify: ${apiError.message}`);
-      throw new Error("Failed to delete customer from Shopify");
-    }
+    const deleteShopifyCustomer = async () => {
+      try {
+        await shopifyAPI.delete(`/customers/${shopifyId}.json`);
+      } catch (apiError) {
+        logger.error(
+          `Error deleting customer from Shopify: ${apiError.message}`
+        );
+        throw new Error("Failed to delete customer from Shopify");
+      }
+    };
+
+    await retry(deleteShopifyCustomer);
 
     await Customer.destroy({ where: { shopifyId }, transaction });
 
@@ -305,11 +351,15 @@ exports.delete_company = async (req, res) => {
           return address;
         });
 
-        await shopifyAPI.put(`/customers/${customer.shopifyId}.json`, {
-          customer: {
-            addresses: updatedAddresses,
-          },
-        });
+        const updateShopifyCustomer = async () => {
+          await shopifyAPI.put(`/customers/${customer.shopifyId}.json`, {
+            customer: {
+              addresses: updatedAddresses,
+            },
+          });
+        };
+
+        await retry(updateShopifyCustomer);
       }
     }
 

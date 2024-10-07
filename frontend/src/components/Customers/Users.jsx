@@ -2,8 +2,7 @@ import React, { useState, useContext } from "react";
 import styled from "styled-components";
 import { MoreVertOutlined } from "@material-ui/icons";
 import DeleteIcon from "@mui/icons-material/Delete";
-import ArrowBackIosIcon from "@mui/icons-material/ArrowBackIos";
-import ArrowForwardIosIcon from "@mui/icons-material/ArrowForwardIos";
+import { FrontArrow, BackArrow } from "./Users.styles";
 import { useNavigate } from "react-router-dom";
 import { UserContext } from "../utility/ContextManager";
 import { StyledTable } from "../CustomerForm/CustomerForm.styles";
@@ -146,14 +145,14 @@ const Users = ({
           onClick={handlePrevPage}
           disabled={!prevPageInfo}
         >
-          <ArrowBackIosIcon style={{ fontSize: 12 }} />
+          <BackArrow prevPageInfo={prevPageInfo} style={{ fontSize: 12 }} />
         </button>
         <button
           className="p-2 bg-gray-300 rounded"
           onClick={handleNextPage}
           disabled={!nextPageInfo}
         >
-          <ArrowForwardIosIcon style={{ fontSize: 12 }} />
+          <FrontArrow nextPageInfo={nextPageInfo} style={{ fontSize: 12 }} />
         </button>
       </div>
     </div>
