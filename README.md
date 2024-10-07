@@ -1,6 +1,6 @@
 ## Shopify and ERP Syncronization
 
-This app is deployed with docker compose and has three services;
+This app was deployed with docker compose and has three services;
 * frontend service powered by React
 * backend service powered by Node.js (Express.js)
 * dataase service powered by Mariadb (SQL DB)
